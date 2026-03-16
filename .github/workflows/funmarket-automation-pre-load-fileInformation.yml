@@ -61,10 +61,10 @@ jobs:
           import json, os
 
           allowed=[
-          "dailyPerformance/",
-          "weeklyPerformance/",
-          "monthlyPerformance/",
-          "yearlyPerformance/"
+              "dailyPerformance/",
+              "weeklyPerformance/",
+              "monthlyPerformance/",
+              "yearlyPerformance/"
           ]
 
           files=[]
@@ -72,17 +72,18 @@ jobs:
 
           with open("files.txt") as f:
               for line in f:
-          parts=line.strip().split("\t")
-          if len(parts)<2:
-              continue
+                  parts=line.strip().split("\t")
 
-          st,path=parts
+                  if len(parts) < 2:
+                      continue
 
-          if any(path.startswith(a) for a in allowed):
-            files.append(path)
-            status[path]=st
+                  st, path = parts
 
-          if len(files)==0:
+                  if any(path.startswith(a) for a in allowed):
+                      files.append(path)
+                      status[path] = st
+
+          if len(files) == 0:
               with open(os.environ["GITHUB_OUTPUT"],"a") as out:
                   out.write("continue=false\n")
               exit(0)
@@ -93,31 +94,30 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"],"a") as out:
               out.write("continue=true\n")
           EOF
-
 ############################################################
 # STEP 5 — Wake services
 ############################################################
 
       # - name: Wake Config Server
       #   if: steps.filter.outputs.continue == 'true'
-        # run: curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health || true
+      #   # run: curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health || true
 
-      - run: sleep 7
-        if: steps.filter.outputs.continue == 'true'
+      # - run: sleep 7
+      #   if: steps.filter.outputs.continue == 'true'
 
       # - name: Wake DB
       #   if: steps.filter.outputs.continue == 'true'
-        # run: curl -s https://funmarketdb.onrender.com/actuator/health || true
+      #   # run: curl -s https://funmarketdb.onrender.com/actuator/health || true
 
-      - run: sleep 7
-        if: steps.filter.outputs.continue == 'true'
+      # - run: sleep 7
+      #   if: steps.filter.outputs.continue == 'true'
 
       # - name: Wake Git Reader
       #   if: steps.filter.outputs.continue == 'true'
-        # run: curl -s https://funmarketgitreader.onrender.com/actuator/health || true
+      #   # run: curl -s https://funmarketgitreader.onrender.com/actuator/health || true
 
-      - run: sleep 7
-        if: steps.filter.outputs.continue == 'true'
+      # - run: sleep 7
+      #   if: steps.filter.outputs.continue == 'true'
 
 ############################################################
 # STEP 6 — Get PR number
