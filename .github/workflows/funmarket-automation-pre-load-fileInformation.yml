@@ -116,8 +116,8 @@ jobs:
       #   if: steps.filter.outputs.continue == 'true'
       #   run: curl -s https://funmarketgitreader.onrender.com/actuator/health || true
 
-      # - run: sleep 7
-      #   if: steps.filter.outputs.continue == 'true'
+      - run: sleep 7
+        if: steps.filter.outputs.continue == 'true'
 
 ############################################################
 # STEP 6 — Get PR number
