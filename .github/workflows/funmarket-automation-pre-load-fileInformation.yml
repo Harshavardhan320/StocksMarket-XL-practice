@@ -51,25 +51,19 @@ jobs:
 ############################################################
 
       - name: Wake Config Server
-        if: steps.filter.outputs.continue == 'true'
         run: curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health || true
 
       - run: sleep 7
-        if: steps.filter.outputs.continue == 'true'
 
       - name: Wake DB
-        if: steps.filter.outputs.continue == 'true'
         run: curl -s https://funmarketdb.onrender.com/actuator/health || true
 
       - run: sleep 7
-        if: steps.filter.outputs.continue == 'true'
-
+     
       - name: Wake Git Reader
-        if: steps.filter.outputs.continue == 'true'
         run: curl -s https://funmarketgitreader.onrender.com/actuator/health || true
 
       - run: sleep 7
-        if: steps.filter.outputs.continue == 'true'
 
 ############################################
 # Get PR info
