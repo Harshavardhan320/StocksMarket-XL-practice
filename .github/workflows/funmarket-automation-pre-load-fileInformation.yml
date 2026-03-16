@@ -128,20 +128,41 @@ jobs:
 
 
 ############################################################
-# STEP 5 — Fetch Pull Request
+# STEP 5 — Get Pull Request Number
 ############################################################
 
-      - name: Get PR info
+      - name: Get PR number
         if: steps.filter.outputs.continue == 'true'
         run: |
           curl -s \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github+json" \
           https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/pulls \
           -o pr_list.json
 
 
 ############################################################
-# STEP 6 — Extract MR fields
+# STEP 6 — Fetch full PR info
+############################################################
+
+      - name: Fetch full PR
+        if: steps.filter.outputs.continue == 'true'
+        run: |
+          PR_NUMBER=$(jq '.[0].number' pr_list.json)
+
+          if [ "$PR_NUMBER" = "null" ]; then
+            echo "{}" > pr.json
+            exit 0
+          fi
+
+          curl -s \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER \
+          -o pr.json
+
+
+############################################################
+# STEP 7 — Extract MR fields
 ############################################################
 
       - name: Extract MR fields
@@ -150,10 +171,8 @@ jobs:
           python3 << 'EOF'
           import json
 
-          with open("pr_list.json") as f:
-              prs=json.load(f)
-
-          pr=prs[0] if prs else {}
+          with open("pr.json") as f:
+              pr=json.load(f)
 
           assignees=[a["login"] for a in pr.get("assignees",[])]
 
@@ -166,11 +185,13 @@ jobs:
 
           with open("mr_fields.json","w") as f:
               json.dump(data,f)
+
+          print("MR Fields:",data)
           EOF
 
 
 ############################################################
-# STEP 7 — Build payload
+# STEP 8 — Build payload
 ############################################################
 
       - name: Build payload
@@ -269,7 +290,7 @@ jobs:
 
 
 ############################################################
-# STEP 8 — Send payload to application
+# STEP 9 — Send payload to application
 ############################################################
 
       - name: Send payload
