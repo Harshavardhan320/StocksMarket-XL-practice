@@ -72,16 +72,16 @@ jobs:
 
           with open("files.txt") as f:
               for line in f:
-                  parts=line.strip().split("\t")
+            parts=line.strip().split("\t")
 
-                  if len(parts) < 2:
-                      continue
+            if len(parts) < 2:
+                continue
 
-                  st, path = parts
+            st, path = parts
 
-                  if any(path.startswith(a) for a in allowed):
-                      files.append(path)
-                      status[path] = st
+            if any(path.startswith(a) for a in allowed):
+                files.append(path)
+                status[path] = st
 
           if len(files) == 0:
               with open(os.environ["GITHUB_OUTPUT"],"a") as out:
@@ -94,8 +94,9 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"],"a") as out:
               out.write("continue=true\n")
           EOF
+
 ############################################################
-# STEP 5 — Wake services
+# STEP 5 — Wake services (optional)
 ############################################################
 
       # - name: Wake Config Server
@@ -119,6 +120,7 @@ jobs:
       # - run: sleep 7
       #   if: steps.filter.outputs.continue == 'true'
 
+
 ############################################################
 # STEP 6 — Get PR number
 ############################################################
@@ -138,7 +140,13 @@ jobs:
       - name: Fetch PR info
         if: steps.filter.outputs.continue == 'true'
         run: |
-          PR_NUMBER=$(jq '.[0].number' pr_list.json)
+
+          PR_NUMBER=$(jq -r '.[0].number // empty' pr_list.json)
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR found"
+            exit 0
+          fi
 
           curl -s \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -146,44 +154,61 @@ jobs:
           -o pr.json
 
 ############################################################
-# STEP 8 — Extract MR fields (IST)
+# STEP 8 — Extract MR fields (safe)
 ############################################################
 
       - name: Extract MR fields
         if: steps.filter.outputs.continue == 'true'
         run: |
 
-          CREATED=$(jq -r '.created_at' pr.json)
-          MERGED=$(jq -r '.merged_at' pr.json)
-          PUBLISHER=$(jq -r '.user.login' pr.json)
-          ASSIGNEES=$(jq -r '[.assignees[].login] | join(", ")' pr.json)
+          PR_NUMBER=$(jq -r '.number // empty' pr.json)
+
+          CREATED=$(jq -r '.created_at // empty' pr.json)
+          MERGED=$(jq -r '.merged_at // empty' pr.json)
+          PUBLISHER=$(jq -r '.user.login // empty' pr.json)
+
+          ASSIGNEES=$(jq -r '[.assignees[]?.login] | join(", ")' pr.json)
 
           REVIEWS=$(curl -s \
           -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          https://api.github.com/repos/${{ github.repository }}/pulls/$(jq -r '.number' pr.json)/reviews)
+          https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews)
 
-          APPROVED=$(echo "$REVIEWS" | jq -r '[.[] | select(.state=="APPROVED")][0].submitted_at // empty')
-          APPROVER=$(echo "$REVIEWS" | jq -r '[.[] | select(.state=="APPROVED")][0].user.login // empty')
+          APPROVED=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].submitted_at // empty')
+          APPROVER=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].user.login // empty')
 
-          CREATED_IST=$(date -d "$CREATED" +"%Y-%m-%dT%H:%M:%S")
-          APPROVED_IST=$(date -d "$APPROVED" +"%Y-%m-%dT%H:%M:%S")
-          MERGED_IST=$(date -d "$MERGED" +"%Y-%m-%dT%H:%M:%S")
+          if [ -n "$CREATED" ]; then
+            CREATED_IST=$(date -d "$CREATED" +"%Y-%m-%dT%H:%M:%S")
+          else
+            CREATED_IST=""
+          fi
+
+          if [ -n "$APPROVED" ]; then
+            APPROVED_IST=$(date -d "$APPROVED" +"%Y-%m-%dT%H:%M:%S")
+          else
+            APPROVED_IST=""
+          fi
+
+          if [ -n "$MERGED" ]; then
+            MERGED_IST=$(date -d "$MERGED" +"%Y-%m-%dT%H:%M:%S")
+          else
+            MERGED_IST=""
+          fi
 
           jq -n \
-          --arg publisher "$PUBLISHER" \
-          --arg approver "$APPROVER" \
-          --arg created "$CREATED_IST" \
-          --arg approved "$APPROVED_IST" \
-          --arg merged "$MERGED_IST" \
-          --arg assignees "$ASSIGNEES" \
-          '{
-          fileMRPublisherName:$publisher,
-          fileMRApprovedName:$approver,
-          fileMRPublisherDateAndTime:$created,
-          fileMRApprovedDateAndTime:$approved,
-          fileCreationAndMergedIntoMainBranchDateAndTime:$merged,
-          AssigneesNames:$assignees
-          }' > mr_fields.json
+            --arg publisher "$PUBLISHER" \
+            --arg approver "$APPROVER" \
+            --arg created "$CREATED_IST" \
+            --arg approved "$APPROVED_IST" \
+            --arg merged "$MERGED_IST" \
+            --arg assignees "$ASSIGNEES" \
+            '{
+              fileMRPublisherName:$publisher,
+              fileMRApprovedName:$approver,
+              fileMRPublisherDateAndTime:$created,
+              fileMRApprovedDateAndTime:$approved,
+              fileCreationAndMergedIntoMainBranchDateAndTime:$merged,
+              AssigneesNames:$assignees
+            }' > mr_fields.json
 
 ############################################################
 # STEP 9 — Build payload
@@ -215,59 +240,59 @@ jobs:
 
           for path in data["files"]:
 
-          name=os.path.basename(path)
-          ext=name.split(".")[-1]
+              name=os.path.basename(path)
+              ext=name.split(".")[-1]
 
-          size=os.path.getsize(path) if os.path.exists(path) else 0
+              size=os.path.getsize(path) if os.path.exists(path) else 0
 
-          sub_date = run(f'git log -1 --pretty=%cI -- "{path}"')
-          sub_date_ist = to_ist(sub_date)
+              sub_date = run(f'git log -1 --pretty=%cI -- "{path}"')
+              sub_date_ist = to_ist(sub_date)
 
-          sub_commit = run(f'git log -1 --pretty=%s -- "{path}"')
+              sub_commit = run(f'git log -1 --pretty=%s -- "{path}"')
 
-          pusher_name=run(f'git log -1 --pretty=%an -- "{path}"')
-          pusher_email=run(f'git log -1 --pretty=%ae -- "{path}"')
+              pusher_name=run(f'git log -1 --pretty=%an -- "{path}"')
+              pusher_email=run(f'git log -1 --pretty=%ae -- "{path}"')
 
-          status=data["status"].get(path,"M")
+              status=data["status"].get(path,"M")
 
-          status_map={
-              "A":"ADDED",
-              "M":"MODIFIED",
-              "D":"REMOVED"
-          }
+              status_map={
+                  "A":"ADDED",
+                  "M":"MODIFIED",
+                  "D":"REMOVED"
+              }
 
-          obj={
+              obj={
 
-          "fileName":name,
-          "fileType":ext,
-          "fileSize":size,
+              "fileName":name,
+              "fileType":ext,
+              "fileSize":size,
 
-          "gitFileCreationDateAndTimeInSubBranch":sub_date_ist,
+              "gitFileCreationDateAndTimeInSubBranch":sub_date_ist,
 
-          "fileMRPublisherDateAndTime":mr["fileMRPublisherDateAndTime"],
-          "fileMRApprovedDateAndTime":mr["fileMRApprovedDateAndTime"],
-          "fileCreationAndMergedIntoMainBranchDateAndTime":mr["fileCreationAndMergedIntoMainBranchDateAndTime"],
+              "fileMRPublisherDateAndTime":mr["fileMRPublisherDateAndTime"],
+              "fileMRApprovedDateAndTime":mr["fileMRApprovedDateAndTime"],
+              "fileCreationAndMergedIntoMainBranchDateAndTime":mr["fileCreationAndMergedIntoMainBranchDateAndTime"],
 
-          "fileModifiedInGitHubDateAndTime":sub_date_ist,
+              "fileModifiedInGitHubDateAndTime":sub_date_ist,
 
-          "gitHubFileInToSubBranchPusherName":pusher_name,
-          "gitHubFileInToSubBranchPusherEmailId":pusher_email,
+              "gitHubFileInToSubBranchPusherName":pusher_name,
+              "gitHubFileInToSubBranchPusherEmailId":pusher_email,
 
-          "fileGithubFileMergedIntoMainBranchMergerName":main_merger,
-          "fileGithubFileMergedIntoMainBranchMergerEmailId":main_merger_email,
+              "fileGithubFileMergedIntoMainBranchMergerName":main_merger,
+              "fileGithubFileMergedIntoMainBranchMergerEmailId":main_merger_email,
 
-          "commitMessagesInSubBranch":sub_commit,
-          "commitMessagesInMainBranch":main_commit,
+              "commitMessagesInSubBranch":sub_commit,
+              "commitMessagesInMainBranch":main_commit,
 
-          "status":status_map.get(status,status),
+              "status":status_map.get(status,status),
 
-          "fileMRPublisherName":mr["fileMRPublisherName"],
-          "fileMRApprovedName":mr["fileMRApprovedName"],
-          "AssigneesNames":mr["AssigneesNames"]
+              "fileMRPublisherName":mr["fileMRPublisherName"],
+              "fileMRApprovedName":mr["fileMRApprovedName"],
+              "AssigneesNames":mr["AssigneesNames"]
 
-          }
+              }
 
-          payload.append(obj)
+              payload.append(obj)
 
           with open("payload.json","w") as f:
               json.dump(payload,f,indent=2)
@@ -291,7 +316,6 @@ jobs:
 ############################################################
 
       # - name: Send payload
-      #   if: steps.filter.outputs.continue == 'true'
       #   run: |
       #     curl -X POST \
       #     https://funmarketgitreader.onrender.com/fun-market/git-reader/process-file-information \
