@@ -1,0 +1,281 @@
+name: FunMarket Processor
+
+permissions:
+  contents: read
+  pull-requests: read
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+############################################################
+# STEP 1 — Ensure commit is merged into main
+############################################################
+
+      - name: Check merge commit
+        id: mergecheck
+        run: |
+          parents=$(git rev-list --parents -n 1 HEAD | wc -w)
+
+          if [ "$parents" -lt 3 ]; then
+            echo "Not a merge commit. Skipping workflow."
+            echo "continue=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "continue=true" >> $GITHUB_OUTPUT
+
+
+############################################################
+# STEP 2 — Detect changed files
+############################################################
+
+      - name: Detect changed files
+        if: steps.mergecheck.outputs.continue == 'true'
+        run: |
+          git diff --name-status ${{ github.event.before }} ${{ github.sha }} > files.txt
+          cat files.txt
+
+
+############################################################
+# STEP 3 — Filter allowed folders
+############################################################
+
+      - name: Filter folders
+        id: filter
+        if: steps.mergecheck.outputs.continue == 'true'
+        run: |
+          python3 << 'EOF'
+          import json, os
+
+          allowed=[
+            "dailyPerformance/",
+            "weeklyPerformance/",
+            "monthlyPerformance/",
+            "yearlyPerformance/"
+          ]
+
+          files=[]
+          status={}
+
+          with open("files.txt") as f:
+              for line in f:
+                  parts=line.strip().split("\t")
+
+                  if len(parts)<2:
+                      continue
+
+                  st,path=parts
+
+                  if any(path.startswith(a) for a in allowed):
+                      files.append(path)
+                      status[path]=st
+
+          if len(files)==0:
+              print("No valid folders changed. Skipping.")
+              with open(os.environ["GITHUB_OUTPUT"],"a") as out:
+                  out.write("continue=false\n")
+              exit(0)
+
+          with open("filtered.json","w") as f:
+              json.dump({"files":files,"status":status},f)
+
+          with open(os.environ["GITHUB_OUTPUT"],"a") as out:
+              out.write("continue=true\n")
+          EOF
+
+
+############################################################
+# STEP 4 — Wake services
+############################################################
+
+      - name: Wake Config Server
+        if: steps.filter.outputs.continue == 'true'
+        run: curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health || true
+
+      - name: Wait
+        if: steps.filter.outputs.continue == 'true'
+        run: sleep 30
+
+      - name: Wake DB
+        if: steps.filter.outputs.continue == 'true'
+        run: curl -s https://funmarketdb.onrender.com/actuator/health || true
+
+      - name: Wait
+        if: steps.filter.outputs.continue == 'true'
+        run: sleep 30
+
+      - name: Wake Git Reader
+        if: steps.filter.outputs.continue == 'true'
+        run: curl -s https://funmarketgitreader.onrender.com/actuator/health || true
+
+      - name: Wait
+        if: steps.filter.outputs.continue == 'true'
+        run: sleep 30
+
+
+############################################################
+# STEP 5 — Fetch Pull Request
+############################################################
+
+      - name: Get PR info
+        if: steps.filter.outputs.continue == 'true'
+        run: |
+          curl -s \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/pulls \
+          -o pr_list.json
+
+
+############################################################
+# STEP 6 — Extract MR fields
+############################################################
+
+      - name: Extract MR fields
+        if: steps.filter.outputs.continue == 'true'
+        run: |
+          python3 << 'EOF'
+          import json
+
+          with open("pr_list.json") as f:
+              prs=json.load(f)
+
+          pr=prs[0] if prs else {}
+
+          assignees=[a["login"] for a in pr.get("assignees",[])]
+
+          data={
+            "fileMRPublisherName":pr.get("user",{}).get("login"),
+            "fileMRApprovedName":pr.get("merged_by",{}).get("login"),
+            "fileMRPublisherDateAndTime":pr.get("created_at"),
+            "AssigneesNames":", ".join(assignees)
+          }
+
+          with open("mr_fields.json","w") as f:
+              json.dump(data,f)
+          EOF
+
+
+############################################################
+# STEP 7 — Build payload
+############################################################
+
+      - name: Build payload
+        if: steps.filter.outputs.continue == 'true'
+        run: |
+          python3 << 'EOF'
+          import json,os,subprocess
+
+          def run(cmd):
+              return subprocess.getoutput(cmd).strip()
+
+          with open("filtered.json") as f:
+              data=json.load(f)
+
+          with open("mr_fields.json") as f:
+              mr=json.load(f)
+
+          files=data["files"]
+          status_map=data["status"]
+
+          payload=[]
+
+          for path in files:
+
+              name=os.path.basename(path)
+              ext=name.split(".")[-1]
+
+              try:
+                  size=os.path.getsize(path)
+              except:
+                  size=0
+
+              pusher_name=run(f'git log -1 --pretty=%an -- "{path}"')
+              pusher_email=run(f'git log -1 --pretty=%ae -- "{path}"')
+              sub_date=run(f'git log -1 --pretty=%cI -- "{path}"')
+
+              merger_name=run('git log -1 --pretty=%cn')
+              merger_email=run('git log -1 --pretty=%ce')
+              main_date=run('git log -1 --pretty=%cI')
+
+              sub_commits=run(f'git log --pretty=%s -- "{path}"').split("\n")
+              main_commits=run('git log --pretty=%s').split("\n")
+
+              commit_msg_sub=", ".join(
+                f"({i+1}) {msg}" for i,msg in enumerate(sub_commits) if msg
+              )
+
+              commit_msg_main=", ".join(
+                f"({i+1}) {msg}" for i,msg in enumerate(main_commits) if msg
+              )
+
+              st=status_map.get(path,"M")
+
+              status={
+                "A":"ADDED",
+                "M":"MODIFIED",
+                "D":"REMOVED"
+              }.get(st,st)
+
+              obj={
+
+                "fileName":name,
+                "fileType":ext,
+                "fileSize":size,
+
+                "gitFileCreationDateAndTimeInSubBranch":sub_date,
+                "fileMRApprovedDateAndTime":main_date,
+                "fileCreationAndMergedIntoMainBranchDateAndTime":main_date,
+                "fileModifiedInGitHubDateAndTime":main_date,
+
+                "gitHubFileInToSubBranchPusherName":pusher_name,
+                "gitHubFileInToSubBranchPusherEmailId":pusher_email,
+
+                "fileGithubFileMergedIntoMainBranchMergerName":merger_name,
+                "fileGithubFileMergedIntoMainBranchMergerEmailId":merger_email,
+
+                "commitMessagesInSubBranch":commit_msg_sub,
+                "commitMessagesInMainBranch":commit_msg_main,
+
+                "status":status,
+
+                "fileMRPublisherName":mr.get("fileMRPublisherName"),
+                "fileMRApprovedName":mr.get("fileMRApprovedName"),
+                "fileMRPublisherDateAndTime":mr.get("fileMRPublisherDateAndTime"),
+                "AssigneesNames":mr.get("AssigneesNames")
+
+              }
+
+              payload.append(obj)
+
+          with open("payload.json","w") as f:
+              json.dump(payload,f,indent=2)
+
+          print("Payload ready:",payload)
+          EOF
+
+
+############################################################
+# STEP 8 — Send payload to application
+############################################################
+
+      - name: Send payload
+        if: steps.filter.outputs.continue == 'true'
+        run: |
+          curl -s -X POST \
+          https://funmarketgitreader.onrender.com/fun-market/git-reader/process-file-information \
+          -H "Content-Type: application/json" \
+          -d @payload.json
