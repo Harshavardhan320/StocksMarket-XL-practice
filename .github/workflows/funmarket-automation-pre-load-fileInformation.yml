@@ -5,226 +5,218 @@ permissions:
   pull-requests: read
 
 on:
-  push:
+  pull_request:
     branches:
       - main
+    types: [closed]
 
 jobs:
+
   process:
+
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+
     env:
       TZ: Asia/Kolkata
 
     steps:
 
 ############################################
-# Checkout
+# Checkout repo
 ############################################
 
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
 ############################################
 # Detect changed files
 ############################################
 
-      - name: Detect changed files
-        run: |
-          git diff --name-status ${{ github.event.before }} ${{ github.sha }} > files.txt
+    - name: Detect changed files
+      run: |
+        git diff --name-status ${{ github.event.pull_request.base.sha }} ${{ github.sha }} > files.txt
 
 ############################################
 # Filter allowed folders
 ############################################
 
-      - name: Filter files
-        run: |
-          grep -E "dailyPerformance/|weeklyPerformance/|monthlyPerformance/|yearlyPerformance/" files.txt > filtered.txt || true
+    - name: Filter files
+      run: |
+        grep -E "dailyPerformance/|weeklyPerformance/|monthlyPerformance/|yearlyPerformance/" files.txt > filtered.txt || true
 
-          if [ ! -s filtered.txt ]; then
-            echo "No valid files changed"
-            exit 0
-          fi
- ############################################################
-# STEP 5 — Wake services (optional)
-############################################################
-
-      - name: Wake Config Server
-        run: curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health || true
-
-      - run: sleep 7
-
-      - name: Wake DB
-        run: curl -s https://funmarketdb.onrender.com/actuator/health || true
-
-      - run: sleep 7
-     
-      - name: Wake Git Reader
-        run: curl -s https://funmarketgitreader.onrender.com/actuator/health || true
-
-      - run: sleep 7
+        if [ ! -s filtered.txt ]; then
+          echo "No valid files found"
+          exit 0
+        fi
 
 ############################################
-# Get PR info
+# API 1 — Get PR details
 ############################################
 
-      - name: Get PR number
-        run: |
-          curl -s \
-          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/pulls \
-          > pr_list.json
-
-          PR_NUMBER=$(jq -r '.[0].number // empty' pr_list.json)
-
-          if [ -z "$PR_NUMBER" ]; then
-            echo "No PR detected"
-            exit 0
-          fi
-
-          echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
+    - name: Get PR details
+      run: |
+        curl -s \
+        -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+        https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} \
+        > pr.json
 
 ############################################
-# Fetch PR details
+# API 2 — Get PR reviews
 ############################################
 
-      - name: Fetch PR details
-        run: |
-          curl -s \
-          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER \
-          > pr.json
+    - name: Get PR reviews
+      run: |
+        curl -s \
+        -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+        https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
+        > reviews.json
+
+############################################
+# API 3 — Get commit details
+############################################
+
+    - name: Get commit info
+      run: |
+        curl -s \
+        -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+        https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }} \
+        > commit.json
 
 ############################################
 # Extract MR fields
 ############################################
 
-      - name: Extract MR fields
-        run: |
+    - name: Extract MR fields
+      run: |
 
-          CREATED=$(jq -r '.created_at // empty' pr.json)
-          MERGED=$(jq -r '.merged_at // empty' pr.json)
-          PUBLISHER=$(jq -r '.user.login // empty' pr.json)
+        PUBLISHER=$(jq -r '.user.login // ""' pr.json)
+        CREATED=$(jq -r '.created_at // ""' pr.json)
+        MERGED=$(jq -r '.merged_at // ""' pr.json)
 
-          ASSIGNEES=$(jq -r '[.assignees[]?.login] | join(", ")' pr.json)
+        ASSIGNEES=$(jq -r '[.assignees[]?.login] | join(", ")' pr.json)
 
-          REVIEWS=$(curl -s \
-          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-          https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews)
+        APPROVER=$(jq -r '[.[]? | select(.state=="APPROVED")][0].user.login // ""' reviews.json)
+        APPROVED=$(jq -r '[.[]? | select(.state=="APPROVED")][0].submitted_at // ""' reviews.json)
 
-          APPROVED=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].submitted_at // empty')
-          APPROVER=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].user.login // empty')
+        CREATED_IST=$(date -d "$CREATED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
+        APPROVED_IST=$(date -d "$APPROVED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
+        MERGED_IST=$(date -d "$MERGED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
 
-          CREATED_IST=$(date -d "$CREATED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
-          APPROVED_IST=$(date -d "$APPROVED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
-          MERGED_IST=$(date -d "$MERGED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
-
-          echo "{
-            \"fileMRPublisherName\":\"$PUBLISHER\",
-            \"fileMRApprovedName\":\"$APPROVER\",
-            \"fileMRPublisherDateAndTime\":\"$CREATED_IST\",
-            \"fileMRApprovedDateAndTime\":\"$APPROVED_IST\",
-            \"fileCreationAndMergedIntoMainBranchDateAndTime\":\"$MERGED_IST\",
-            \"AssigneesNames\":\"$ASSIGNEES\"
-          }" > mr_fields.json
+        jq -n \
+        --arg publisher "$PUBLISHER" \
+        --arg approver "$APPROVER" \
+        --arg created "$CREATED_IST" \
+        --arg approved "$APPROVED_IST" \
+        --arg merged "$MERGED_IST" \
+        --arg assignees "$ASSIGNEES" \
+        '{
+          fileMRPublisherName:$publisher,
+          fileMRApprovedName:$approver,
+          fileMRPublisherDateAndTime:$created,
+          fileMRApprovedDateAndTime:$approved,
+          fileCreationAndMergedIntoMainBranchDateAndTime:$merged,
+          AssigneesNames:$assignees
+        }' > mr_fields.json
 
 ############################################
-# Build payload
+# Build payload (18 fields)
 ############################################
 
-      - name: Build payload
-        run: |
+    - name: Build payload
+      run: |
 
-          MAIN_COMMIT=$(git log -1 --pretty=%s)
-          MAIN_MERGER=$(git log -1 --pretty=%cn)
-          MAIN_EMAIL=$(git log -1 --pretty=%ce)
+        MAIN_COMMIT=$(git log -1 --pretty=%s)
+        MERGER_NAME=$(git log -1 --pretty=%cn)
+        MERGER_EMAIL=$(git log -1 --pretty=%ce)
 
-          > payload.json
-          echo "[" >> payload.json
+        > payload.json
+        echo "[" >> payload.json
 
-          FIRST=true
+        FIRST=true
 
-          while IFS=$'\t' read -r STATUS FILE
-          do
+        while IFS=$'\t' read -r STATUS FILE
+        do
 
-            NAME=$(basename "$FILE")
-            TYPE="${NAME##*.}"
-            SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+          NAME=$(basename "$FILE")
+          TYPE="${NAME##*.}"
+          SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
 
-            SUB_DATE=$(git log -1 --pretty=%cI -- "$FILE")
-            SUB_DATE_IST=$(date -d "$SUB_DATE" +"%Y-%m-%dT%H:%M:%S")
+          SUB_DATE=$(git log -1 --pretty=%cI -- "$FILE")
+          SUB_DATE_IST=$(date -d "$SUB_DATE" +"%Y-%m-%dT%H:%M:%S")
 
-            SUB_COMMIT=$(git log -1 --pretty=%s -- "$FILE")
-            PUSHER=$(git log -1 --pretty=%an -- "$FILE")
-            PUSHER_EMAIL=$(git log -1 --pretty=%ae -- "$FILE")
+          SUB_COMMIT=$(git log -1 --pretty=%s -- "$FILE")
+          PUSHER=$(git log -1 --pretty=%an -- "$FILE")
+          PUSHER_EMAIL=$(git log -1 --pretty=%ae -- "$FILE")
 
-            STATUS_WORD="MODIFIED"
-            if [ "$STATUS" = "A" ]; then STATUS_WORD="ADDED"; fi
-            if [ "$STATUS" = "D" ]; then STATUS_WORD="REMOVED"; fi
+          STATUS_WORD="MODIFIED"
+          if [ "$STATUS" = "A" ]; then STATUS_WORD="ADDED"; fi
+          if [ "$STATUS" = "D" ]; then STATUS_WORD="REMOVED"; fi
 
-            if [ "$FIRST" = true ]; then
-              FIRST=false
-            else
-              echo "," >> payload.json
-            fi
+          if [ "$FIRST" = true ]; then
+            FIRST=false
+          else
+            echo "," >> payload.json
+          fi
 
-            jq -n \
-            --arg name "$NAME" \
-            --arg type "$TYPE" \
-            --arg size "$SIZE" \
-            --arg subdate "$SUB_DATE_IST" \
-            --arg moddate "$SUB_DATE_IST" \
-            --arg pusher "$PUSHER" \
-            --arg pusher_email "$PUSHER_EMAIL" \
-            --arg merger "$MAIN_MERGER" \
-            --arg merger_email "$MAIN_EMAIL" \
-            --arg sub_commit "$SUB_COMMIT" \
-            --arg main_commit "$MAIN_COMMIT" \
-            --arg status "$STATUS_WORD" \
-            --slurpfile mr mr_fields.json \
-            '{
-              fileName:$name,
-              fileType:$type,
-              fileSize:($size|tonumber),
-              gitFileCreationDateAndTimeInSubBranch:$subdate,
-              fileMRPublisherDateAndTime:$mr[0].fileMRPublisherDateAndTime,
-              fileMRApprovedDateAndTime:$mr[0].fileMRApprovedDateAndTime,
-              fileCreationAndMergedIntoMainBranchDateAndTime:$mr[0].fileCreationAndMergedIntoMainBranchDateAndTime,
-              fileModifiedInGitHubDateAndTime:$moddate,
-              gitHubFileInToSubBranchPusherName:$pusher,
-              gitHubFileInToSubBranchPusherEmailId:$pusher_email,
-              fileGithubFileMergedIntoMainBranchMergerName:$merger,
-              fileGithubFileMergedIntoMainBranchMergerEmailId:$merger_email,
-              commitMessagesInSubBranch:$sub_commit,
-              commitMessagesInMainBranch:$main_commit,
-              status:$status,
-              fileMRPublisherName:$mr[0].fileMRPublisherName,
-              fileMRApprovedName:$mr[0].fileMRApprovedName,
-              AssigneesNames:$mr[0].AssigneesNames
-            }' >> payload.json
+          jq -n \
+          --arg name "$NAME" \
+          --arg type "$TYPE" \
+          --arg size "$SIZE" \
+          --arg subdate "$SUB_DATE_IST" \
+          --arg moddate "$SUB_DATE_IST" \
+          --arg pusher "$PUSHER" \
+          --arg pusher_email "$PUSHER_EMAIL" \
+          --arg merger "$MERGER_NAME" \
+          --arg merger_email "$MERGER_EMAIL" \
+          --arg sub_commit "$SUB_COMMIT" \
+          --arg main_commit "$MAIN_COMMIT" \
+          --arg status "$STATUS_WORD" \
+          --slurpfile mr mr_fields.json \
+          '{
+            fileName:$name,
+            fileType:$type,
+            fileSize:($size|tonumber),
+            gitFileCreationDateAndTimeInSubBranch:$subdate,
+            fileMRPublisherDateAndTime:$mr[0].fileMRPublisherDateAndTime,
+            fileMRApprovedDateAndTime:$mr[0].fileMRApprovedDateAndTime,
+            fileCreationAndMergedIntoMainBranchDateAndTime:$mr[0].fileCreationAndMergedIntoMainBranchDateAndTime,
+            fileModifiedInGitHubDateAndTime:$moddate,
+            gitHubFileInToSubBranchPusherName:$pusher,
+            gitHubFileInToSubBranchPusherEmailId:$pusher_email,
+            fileGithubFileMergedIntoMainBranchMergerName:$merger,
+            fileGithubFileMergedIntoMainBranchMergerEmailId:$merger_email,
+            commitMessagesInSubBranch:$sub_commit,
+            commitMessagesInMainBranch:$main_commit,
+            status:$status,
+            fileMRPublisherName:$mr[0].fileMRPublisherName,
+            fileMRApprovedName:$mr[0].fileMRApprovedName,
+            AssigneesNames:$mr[0].AssigneesNames
+          }' >> payload.json
 
-          done < filtered.txt
+        done < filtered.txt
 
-          echo "]" >> payload.json
+        echo "]" >> payload.json
 
 ############################################
 # Print payload
 ############################################
 
-      - name: Print Payload
-        run: |
-          echo "====== PAYLOAD ======"
-          cat payload.json
-          echo "====================="
+    - name: Print payload
+      run: |
+        echo "====== PAYLOAD ======"
+        cat payload.json
+        echo "====================="
 
 ############################################
-# Send payload
+# Send payload to your API
 ############################################
 
-      - name: Send payload
-        run: |
-          curl -X POST \
-          https://funmarketgitreader.onrender.com/fun-market/git-reader/process-file-information \
-          -H "Content-Type: application/json" \
-          -d @payload.json
+    - name: Send payload
+      run: |
+        curl -X POST \
+        https://funmarketgitreader.onrender.com/fun-market/git-reader/process-file-information \
+        -H "Content-Type: application/json" \
+        -d @payload.json
