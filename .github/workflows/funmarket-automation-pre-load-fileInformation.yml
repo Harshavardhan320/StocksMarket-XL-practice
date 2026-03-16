@@ -72,15 +72,15 @@ jobs:
 
           with open("files.txt") as f:
               for line in f:
-                  parts=line.strip().split("\t")
-                  if len(parts)<2:
-                      continue
+          parts=line.strip().split("\t")
+          if len(parts)<2:
+              continue
 
-                  st,path=parts
+          st,path=parts
 
-                  if any(path.startswith(a) for a in allowed):
-                      files.append(path)
-                      status[path]=st
+          if any(path.startswith(a) for a in allowed):
+            files.append(path)
+            status[path]=st
 
           if len(files)==0:
               with open(os.environ["GITHUB_OUTPUT"],"a") as out:
@@ -100,21 +100,21 @@ jobs:
 
       # - name: Wake Config Server
       #   if: steps.filter.outputs.continue == 'true'
-      #   run: curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health || true
+        # run: curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health || true
 
-      # - run: sleep 7
-      #   if: steps.filter.outputs.continue == 'true'
+      - run: sleep 7
+        if: steps.filter.outputs.continue == 'true'
 
       # - name: Wake DB
       #   if: steps.filter.outputs.continue == 'true'
-      #   run: curl -s https://funmarketdb.onrender.com/actuator/health || true
+        # run: curl -s https://funmarketdb.onrender.com/actuator/health || true
 
-      # - run: sleep 7
-      #   if: steps.filter.outputs.continue == 'true'
+      - run: sleep 7
+        if: steps.filter.outputs.continue == 'true'
 
       # - name: Wake Git Reader
       #   if: steps.filter.outputs.continue == 'true'
-      #   run: curl -s https://funmarketgitreader.onrender.com/actuator/health || true
+        # run: curl -s https://funmarketgitreader.onrender.com/actuator/health || true
 
       - run: sleep 7
         if: steps.filter.outputs.continue == 'true'
@@ -158,13 +158,12 @@ jobs:
           PUBLISHER=$(jq -r '.user.login' pr.json)
           ASSIGNEES=$(jq -r '[.assignees[].login] | join(", ")' pr.json)
 
-          APPROVED=$(curl -s \
-          https://api.github.com/repos/${{ github.repository }}/pulls/$(jq -r '.number' pr.json)/reviews \
-          | jq -r '[.[] | select(.state=="APPROVED")][0].submitted_at')
+          REVIEWS=$(curl -s \
+          -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          https://api.github.com/repos/${{ github.repository }}/pulls/$(jq -r '.number' pr.json)/reviews)
 
-          APPROVER=$(curl -s \
-          https://api.github.com/repos/${{ github.repository }}/pulls/$(jq -r '.number' pr.json)/reviews \
-          | jq -r '[.[] | select(.state=="APPROVED")][0].user.login')
+          APPROVED=$(echo "$REVIEWS" | jq -r '[.[] | select(.state=="APPROVED")][0].submitted_at // empty')
+          APPROVER=$(echo "$REVIEWS" | jq -r '[.[] | select(.state=="APPROVED")][0].user.login // empty')
 
           CREATED_IST=$(date -d "$CREATED" +"%Y-%m-%dT%H:%M:%S")
           APPROVED_IST=$(date -d "$APPROVED" +"%Y-%m-%dT%H:%M:%S")
@@ -187,13 +186,12 @@ jobs:
           }' > mr_fields.json
 
 ############################################################
-# STEP 9 — Build payload (all 18 fields)
+# STEP 9 — Build payload
 ############################################################
 
       - name: Build payload
         if: steps.filter.outputs.continue == 'true'
         run: |
-
           python3 << 'EOF'
           import json, subprocess, os
 
@@ -233,9 +231,9 @@ jobs:
           status=data["status"].get(path,"M")
 
           status_map={
-          "A":"ADDED",
-          "M":"MODIFIED",
-          "D":"REMOVED"
+              "A":"ADDED",
+              "M":"MODIFIED",
+              "D":"REMOVED"
           }
 
           obj={
@@ -275,11 +273,10 @@ jobs:
               json.dump(payload,f,indent=2)
 
           print(payload)
-
           EOF
 
 ############################################################
-# STEP 10 — printing data
+# STEP 10 — Print payload
 ############################################################
 
       - name: Print Payload JSON
@@ -290,7 +287,7 @@ jobs:
           echo "=========================="
 
 ############################################################
-# STEP 10 — Send payload
+# STEP 11 — Send payload
 ############################################################
 
       # - name: Send payload
