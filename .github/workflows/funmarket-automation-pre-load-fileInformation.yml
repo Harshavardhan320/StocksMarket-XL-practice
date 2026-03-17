@@ -170,29 +170,45 @@ jobs:
     - name: Extract MR fields
       if: steps.filter.outputs.continue == 'true'
       run: |
-
+    
         CREATED=$(jq -r '.created_at // ""' pr.json)
         MERGED=$(jq -r '.merged_at // ""' pr.json)
         PUBLISHER=$(jq -r '.user.login // ""' pr.json)
         ASSIGNEES=$(jq -r '[.assignees[]?.login] | join(", ")' pr.json)
-
+    
         REVIEWS=$(curl -s \
         -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
         https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews)
-
-        echo "REVIEWS:"
+    
+        echo "====== REVIEWS RESPONSE ======"
         echo "$REVIEWS"
-
-        APPROVED=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].submitted_at // ""')
-        APPROVER=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].user.login // ""')
-
-        # ✅ NEW FIELD
-        REVIEWERS=$(echo "$REVIEWS" | jq -r '[.[]?.user.login] | unique | join(", ") // ""')
-
+        echo "=============================="
+    
+        # ✅ Check if valid array
+        if echo "$REVIEWS" | jq -e 'type=="array"' > /dev/null 2>&1; then
+    
+          APPROVED=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].submitted_at // ""')
+          APPROVER=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].user.login // ""')
+    
+          REVIEWERS=$(echo "$REVIEWS" | jq -r '[.[]?.user.login] | unique | join(", ") // ""')
+    
+          # If empty reviewers
+          if [ -z "$REVIEWERS" ]; then
+            REVIEWERS="No Reviews"
+          fi
+    
+        else
+          echo "Reviews API failed → setting default values"
+    
+          APPROVED=""
+          APPROVER=""
+          REVIEWERS="No Reviews"
+        fi
+    
         CREATED_IST=$(date -d "$CREATED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
         APPROVED_IST=$(date -d "$APPROVED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
         MERGED_IST=$(date -d "$MERGED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
-
+    
         jq -n \
         --arg publisher "$PUBLISHER" \
         --arg approver "$APPROVER" \
