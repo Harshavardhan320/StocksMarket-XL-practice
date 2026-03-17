@@ -51,6 +51,24 @@ jobs:
           echo "No valid files found"
           exit 0
         fi
+############################################################
+# STEP 5 — Wake services (optional)
+############################################################
+
+    # - name: Wake Config Server
+    #   run: curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health || true
+
+    # - run: sleep 7
+
+    # - name: Wake DB
+    #   run: curl -s https://funmarketdb.onrender.com/actuator/health || true
+
+    # - run: sleep 7
+    
+    # - name: Wake Git Reader
+    #   run: curl -s https://funmarketgitreader.onrender.com/actuator/health || true
+
+    - run: sleep 7
 
 ############################################
 # API 1 — Get PR details
@@ -214,9 +232,9 @@ jobs:
 # Send payload to your API
 ############################################
 
-    - name: Send payload
-      run: |
-        curl -X POST \
-        https://funmarketgitreader.onrender.com/fun-market/git-reader/process-file-information \
-        -H "Content-Type: application/json" \
-        -d @payload.json
+    # - name: Send payload
+    #   run: |
+    #     curl -X POST \
+    #     https://funmarketgitreader.onrender.com/fun-market/git-reader/process-file-information \
+    #     -H "Content-Type: application/json" \
+    #     -d @payload.json
