@@ -5,119 +5,184 @@ permissions:
   pull-requests: read
 
 on:
-  pull_request:
+  push:
     branches:
       - main
-    types: [closed]
 
 jobs:
-
   process:
-
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-
     env:
       TZ: Asia/Kolkata
 
     steps:
 
 ############################################
-# Checkout repo
+# STEP 1 — Checkout
 ############################################
-
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
 
 ############################################
-# Detect changed files
+# STEP 2 — Merge commit check
 ############################################
-
-    - name: Detect changed files
+    - name: Check merge commit
+      id: mergecheck
       run: |
-        git diff --name-status ${{ github.event.pull_request.base.sha }} ${{ github.sha }} > files.txt
-
-############################################
-# Filter allowed folders
-############################################
-
-    - name: Filter files
-      run: |
-        grep -E "dailyPerformance/|weeklyPerformance/|monthlyPerformance/|yearlyPerformance/" files.txt > filtered.txt || true
-
-        if [ ! -s filtered.txt ]; then
-          echo "No valid files found"
+        parents=$(git rev-list --parents -n 1 HEAD | wc -w)
+        if [ "$parents" -lt 3 ]; then
+          echo "continue=false" >> $GITHUB_OUTPUT
           exit 0
         fi
-############################################################
-# STEP 5 — Wake services (optional)
-############################################################
-
-    - name: Wake Config Server
-      run: curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health || true
-
-    - run: sleep 7
-
-    - name: Wake DB
-      run: curl -s https://funmarketdb.onrender.com/actuator/health || true
-
-    - run: sleep 7
-    
-    - name: Wake Git Reader
-      run: curl -s https://funmarketgitreader.onrender.com/actuator/health || true
-
-    - run: sleep 7
+        echo "continue=true" >> $GITHUB_OUTPUT
 
 ############################################
-# API 1 — Get PR details
+# STEP 3 — Detect changed files
 ############################################
+    - name: Detect changed files
+      if: steps.mergecheck.outputs.continue == 'true'
+      run: |
+        git diff --name-status ${{ github.event.before }} ${{ github.sha }} > files.txt
 
-    - name: Get PR details
+############################################
+# STEP 4 — Filter folders
+############################################
+    - name: Filter folders
+      id: filter
+      if: steps.mergecheck.outputs.continue == 'true'
+      run: |
+        python3 << 'EOF'
+        import json, os
+
+        allowed=[
+          "dailyPerformance/",
+          "weeklyPerformance/",
+          "monthlyPerformance/",
+          "yearlyPerformance/"
+        ]
+
+        files=[]
+        status={}
+
+        with open("files.txt") as f:
+            for line in f:
+                parts=line.strip().split("\t")
+                if len(parts)<2:
+                    continue
+                st,path=parts
+                if any(path.startswith(a) for a in allowed):
+                    files.append(path)
+                    status[path]=st
+
+        if len(files)==0:
+            with open(os.environ["GITHUB_OUTPUT"],"a") as out:
+                out.write("continue=false\n")
+            exit(0)
+
+        with open("filtered.json","w") as f:
+            json.dump({"files":files,"status":status},f)
+
+        with open(os.environ["GITHUB_OUTPUT"],"a") as out:
+            out.write("continue=true\n")
+        EOF
+
+############################################
+# STEP 5 — Wake services
+############################################
+    - name: Wake & Wait Services
+      if: steps.filter.outputs.continue == 'true'
+      run: |
+
+        check_service() {
+          NAME=$1
+          URL=$2
+
+          for i in {1..60}
+          do
+            if curl -s "$URL" | grep -q "UP"; then
+              echo "$NAME UP ✅"
+              return 0
+            fi
+            echo "$NAME retry $i"
+            sleep 5
+          done
+
+          echo "$NAME failed ❌"
+          exit 1
+        }
+
+        # Config first
+        check_service "Config" "https://funmarketconfigserver-dckt.onrender.com/actuator/health"
+
+        # Trigger DB + GitReader
+        curl -s https://funmarketdb.onrender.com/actuator/health || true &
+        curl -s https://funmarketgitreader.onrender.com/actuator/health || true &
+        wait
+
+        # Wait parallel
+        check_service "DB" "https://funmarketdb.onrender.com/actuator/health" &
+        PID_DB=$!
+
+        check_service "GitReader" "https://funmarketgitreader.onrender.com/actuator/health" &
+        PID_GR=$!
+
+        wait $PID_DB
+        wait $PID_GR
+
+############################################
+# STEP 6 — Get PR number
+############################################
+    - name: Get PR number
+      if: steps.filter.outputs.continue == 'true'
       run: |
         curl -s \
         -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-        https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }} \
+        https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/pulls \
+        > pr_list.json
+
+        PR_NUMBER=$(jq -r '.[0].number // empty' pr_list.json)
+
+        if [ -z "$PR_NUMBER" ]; then
+          echo "No PR found"
+          exit 0
+        fi
+
+        echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
+
+############################################
+# STEP 7 — Fetch PR info
+############################################
+    - name: Fetch PR info
+      if: steps.filter.outputs.continue == 'true'
+      run: |
+        curl -s \
+        -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+        https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER \
         > pr.json
 
 ############################################
-# API 2 — Get PR reviews
+# STEP 8 — Extract MR fields
 ############################################
-
-    - name: Get PR reviews
-      run: |
-        curl -s \
-        -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-        https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
-        > reviews.json
-
-############################################
-# API 3 — Get commit details
-############################################
-
-    - name: Get commit info
-      run: |
-        curl -s \
-        -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-        https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }} \
-        > commit.json
-
-############################################
-# Extract MR fields
-############################################
-
     - name: Extract MR fields
+      if: steps.filter.outputs.continue == 'true'
       run: |
 
-        PUBLISHER=$(jq -r '.user.login // ""' pr.json)
         CREATED=$(jq -r '.created_at // ""' pr.json)
         MERGED=$(jq -r '.merged_at // ""' pr.json)
-
+        PUBLISHER=$(jq -r '.user.login // ""' pr.json)
         ASSIGNEES=$(jq -r '[.assignees[]?.login] | join(", ")' pr.json)
 
-        APPROVER=$(jq -r '[.[]? | select(.state=="APPROVED")][0].user.login // ""' reviews.json)
-        APPROVED=$(jq -r '[.[]? | select(.state=="APPROVED")][0].submitted_at // ""' reviews.json)
+        REVIEWS=$(curl -s \
+        -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+        https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews)
+
+        echo "REVIEWS:"
+        echo "$REVIEWS"
+
+        APPROVED=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].submitted_at // ""')
+        APPROVER=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].user.login // ""')
 
         CREATED_IST=$(date -d "$CREATED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
         APPROVED_IST=$(date -d "$APPROVED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
@@ -140,99 +205,87 @@ jobs:
         }' > mr_fields.json
 
 ############################################
-# Build payload (18 fields)
+# STEP 9 — Build payload
 ############################################
-
     - name: Build payload
+      if: steps.filter.outputs.continue == 'true'
       run: |
+        python3 << 'EOF'
+        import json, subprocess, os
 
-        MAIN_COMMIT=$(git log -1 --pretty=%s)
-        MERGER_NAME=$(git log -1 --pretty=%cn)
-        MERGER_EMAIL=$(git log -1 --pretty=%ce)
+        def run(cmd):
+            return subprocess.getoutput(cmd).strip()
 
-        > payload.json
-        echo "[" >> payload.json
+        def to_ist(date):
+            return run(f'date -d "{date}" +"%Y-%m-%dT%H:%M:%S"')
 
-        FIRST=true
+        with open("filtered.json") as f:
+            data=json.load(f)
 
-        while IFS=$'\t' read -r STATUS FILE
-        do
+        with open("mr_fields.json") as f:
+            mr=json.load(f)
 
-          NAME=$(basename "$FILE")
-          TYPE="${NAME##*.}"
-          SIZE=$(stat -c%s "$FILE" 2>/dev/null || echo 0)
+        payload=[]
 
-          SUB_DATE=$(git log -1 --pretty=%cI -- "$FILE")
-          SUB_DATE_IST=$(date -d "$SUB_DATE" +"%Y-%m-%dT%H:%M:%S")
+        main_commit = run('git log -1 --pretty=%s')
+        main_merger = run('git log -1 --pretty=%cn')
+        main_merger_email = run('git log -1 --pretty=%ce')
 
-          SUB_COMMIT=$(git log -1 --pretty=%s -- "$FILE")
-          PUSHER=$(git log -1 --pretty=%an -- "$FILE")
-          PUSHER_EMAIL=$(git log -1 --pretty=%ae -- "$FILE")
+        for path in data["files"]:
+            name=os.path.basename(path)
+            ext=name.split(".")[-1]
+            size=os.path.getsize(path) if os.path.exists(path) else 0
 
-          STATUS_WORD="MODIFIED"
-          if [ "$STATUS" = "A" ]; then STATUS_WORD="ADDED"; fi
-          if [ "$STATUS" = "D" ]; then STATUS_WORD="REMOVED"; fi
+            sub_date = run(f'git log -1 --pretty=%cI -- "{path}"')
+            sub_date_ist = to_ist(sub_date)
 
-          if [ "$FIRST" = true ]; then
-            FIRST=false
-          else
-            echo "," >> payload.json
-          fi
+            sub_commit = run(f'git log -1 --pretty=%s -- "{path}"')
 
-          jq -n \
-          --arg name "$NAME" \
-          --arg type "$TYPE" \
-          --arg size "$SIZE" \
-          --arg subdate "$SUB_DATE_IST" \
-          --arg moddate "$SUB_DATE_IST" \
-          --arg pusher "$PUSHER" \
-          --arg pusher_email "$PUSHER_EMAIL" \
-          --arg merger "$MERGER_NAME" \
-          --arg merger_email "$MERGER_EMAIL" \
-          --arg sub_commit "$SUB_COMMIT" \
-          --arg main_commit "$MAIN_COMMIT" \
-          --arg status "$STATUS_WORD" \
-          --slurpfile mr mr_fields.json \
-          '{
-            fileName:$name,
-            fileType:$type,
-            fileSize:($size|tonumber),
-            gitFileCreationDateAndTimeInSubBranch:$subdate,
-            fileMRPublisherDateAndTime:$mr[0].fileMRPublisherDateAndTime,
-            fileMRApprovedDateAndTime:$mr[0].fileMRApprovedDateAndTime,
-            fileCreationAndMergedIntoMainBranchDateAndTime:$mr[0].fileCreationAndMergedIntoMainBranchDateAndTime,
-            fileModifiedInGitHubDateAndTime:$moddate,
-            gitHubFileInToSubBranchPusherName:$pusher,
-            gitHubFileInToSubBranchPusherEmailId:$pusher_email,
-            fileGithubFileMergedIntoMainBranchMergerName:$merger,
-            fileGithubFileMergedIntoMainBranchMergerEmailId:$merger_email,
-            commitMessagesInSubBranch:$sub_commit,
-            commitMessagesInMainBranch:$main_commit,
-            status:$status,
-            fileMRPublisherName:$mr[0].fileMRPublisherName,
-            fileMRApprovedName:$mr[0].fileMRApprovedName,
-            AssigneesNames:$mr[0].AssigneesNames
-          }' >> payload.json
+            pusher_name=run(f'git log -1 --pretty=%an -- "{path}"')
+            pusher_email=run(f'git log -1 --pretty=%ae -- "{path}"')
 
-        done < filtered.txt
+            status=data["status"].get(path,"M")
 
-        echo "]" >> payload.json
+            status_map={
+                "A":"ADDED",
+                "M":"MODIFIED",
+                "D":"REMOVED"
+            }
+
+            obj={
+                "fileName":name,
+                "fileType":ext,
+                "fileSize":size,
+                "gitFileCreationDateAndTimeInSubBranch":sub_date_ist,
+                "fileMRPublisherDateAndTime":mr["fileMRPublisherDateAndTime"],
+                "fileMRApprovedDateAndTime":mr["fileMRApprovedDateAndTime"],
+                "fileCreationAndMergedIntoMainBranchDateAndTime":mr["fileCreationAndMergedIntoMainBranchDateAndTime"],
+                "fileModifiedInGitHubDateAndTime":sub_date_ist,
+                "gitHubFileInToSubBranchPusherName":pusher_name,
+                "gitHubFileInToSubBranchPusherEmailId":pusher_email,
+                "fileGithubFileMergedIntoMainBranchMergerName":main_merger,
+                "fileGithubFileMergedIntoMainBranchMergerEmailId":main_merger_email,
+                "commitMessagesInSubBranch":sub_commit,
+                "commitMessagesInMainBranch":main_commit,
+                "status":status_map.get(status,status),
+                "fileMRPublisherName":mr["fileMRPublisherName"],
+                "fileMRApprovedName":mr["fileMRApprovedName"],
+                "AssigneesNames":mr["AssigneesNames"]
+            }
+
+            payload.append(obj)
+
+        with open("payload.json","w") as f:
+            json.dump(payload,f,indent=2)
+
+        print(payload)
+        EOF
 
 ############################################
-# Print payload
+# STEP 10 — Send payload
 ############################################
-
-    - name: Print payload
-      run: |
-        echo "====== PAYLOAD ======"
-        cat payload.json
-        echo "====================="
-
-############################################
-# Send payload to your API
-############################################
-
     - name: Send payload
+      if: steps.filter.outputs.continue == 'true'
       run: |
         curl -X POST \
         https://funmarketgitreader.onrender.com/fun-market/git-reader/process-file-information \
