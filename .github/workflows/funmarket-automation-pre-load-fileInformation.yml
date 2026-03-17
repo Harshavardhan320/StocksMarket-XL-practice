@@ -56,35 +56,37 @@ jobs:
         python3 << 'EOF'
         import json, os
 
-        allowed=[
+        allowed = [
           "dailyPerformance/",
           "weeklyPerformance/",
           "monthlyPerformance/",
           "yearlyPerformance/"
         ]
 
-        files=[]
-        status={}
+        files = []
+        status = {}
 
         with open("files.txt") as f:
             for line in f:
-                parts=line.strip().split("\t")
-                if len(parts)<2:
+                parts = line.strip().split("\t")
+                if len(parts) < 2:
                     continue
-                st,path=parts
+
+                st, path = parts
+
                 if any(path.startswith(a) for a in allowed):
                     files.append(path)
-                    status[path]=st
+                    status[path] = st
 
-        if len(files)==0:
-            with open(os.environ["GITHUB_OUTPUT"],"a") as out:
+        if len(files) == 0:
+            with open(os.environ["GITHUB_OUTPUT"], "a") as out:
                 out.write("continue=false\n")
             exit(0)
 
-        with open("filtered.json","w") as f:
-            json.dump({"files":files,"status":status},f)
+        with open("filtered.json", "w") as f:
+            json.dump({"files": files, "status": status}, f)
 
-        with open(os.environ["GITHUB_OUTPUT"],"a") as out:
+        with open(os.environ["GITHUB_OUTPUT"], "a") as out:
             out.write("continue=true\n")
         EOF
 
@@ -163,7 +165,7 @@ jobs:
         > pr.json
 
 ############################################
-# STEP 8 — Extract MR fields
+# STEP 8 — Extract MR fields + reviewers
 ############################################
     - name: Extract MR fields
       if: steps.filter.outputs.continue == 'true'
@@ -184,6 +186,9 @@ jobs:
         APPROVED=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].submitted_at // ""')
         APPROVER=$(echo "$REVIEWS" | jq -r '[.[]? | select(.state=="APPROVED")][0].user.login // ""')
 
+        # ✅ NEW FIELD
+        REVIEWERS=$(echo "$REVIEWS" | jq -r '[.[]?.user.login] | unique | join(", ") // ""')
+
         CREATED_IST=$(date -d "$CREATED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
         APPROVED_IST=$(date -d "$APPROVED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
         MERGED_IST=$(date -d "$MERGED" +"%Y-%m-%dT%H:%M:%S" 2>/dev/null || echo "")
@@ -195,13 +200,15 @@ jobs:
         --arg approved "$APPROVED_IST" \
         --arg merged "$MERGED_IST" \
         --arg assignees "$ASSIGNEES" \
+        --arg reviewers "$REVIEWERS" \
         '{
           fileMRPublisherName:$publisher,
           fileMRApprovedName:$approver,
           fileMRPublisherDateAndTime:$created,
           fileMRApprovedDateAndTime:$approved,
           fileCreationAndMergedIntoMainBranchDateAndTime:$merged,
-          AssigneesNames:$assignees
+          AssigneesNames:$assignees,
+          reviewers:$reviewers
         }' > mr_fields.json
 
 ############################################
@@ -270,7 +277,8 @@ jobs:
                 "status":status_map.get(status,status),
                 "fileMRPublisherName":mr["fileMRPublisherName"],
                 "fileMRApprovedName":mr["fileMRApprovedName"],
-                "AssigneesNames":mr["AssigneesNames"]
+                "AssigneesNames":mr["AssigneesNames"],
+                "reviewers":mr.get("reviewers")
             }
 
             payload.append(obj)
