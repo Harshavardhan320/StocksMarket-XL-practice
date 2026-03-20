@@ -33,6 +33,7 @@ jobs:
 
           while read status file; do
 
+            # Only process target folder
             if [[ "$file" != holidayCalendar/* ]]; then
               continue
             fi
@@ -66,15 +67,24 @@ jobs:
             echo "📄 Content Preview:"
             echo "$CONTENT" | head -5
 
-            # 🔥 FIX: NO PIPE → NO SUBSHELL
-            while IFS='|' read -r DATE DAY DESCRIPTION; do
+            # 🔥 AUTO DETECT DELIMITER
+            if echo "$CONTENT" | head -1 | grep -q '|'; then
+              DELIM='|'
+            else
+              DELIM=','
+            fi
 
-              DATE=$(echo "$DATE" | xargs)
-              DAY=$(echo "$DAY" | xargs)
-              DESCRIPTION=$(echo "$DESCRIPTION" | xargs)
+            echo "🔍 Using delimiter: $DELIM"
 
-              # skip empty lines
-              if [[ -z "$DATE" ]]; then
+            # 🔥 FIXED PARSING (NO SUBSHELL + HANDLE \r)
+            while IFS="$DELIM" read -r DATE DAY DESCRIPTION; do
+
+              DATE=$(echo "$DATE" | tr -d '\r' | xargs)
+              DAY=$(echo "$DAY" | tr -d '\r' | xargs)
+              DESCRIPTION=$(echo "$DESCRIPTION" | tr -d '\r' | xargs)
+
+              # skip empty rows
+              if [[ -z "$DATE" || "$DATE" == "Date" ]]; then
                 continue
               fi
 
@@ -94,7 +104,7 @@ jobs:
 
               JSON_OUTPUT=$(echo "$JSON_OUTPUT" | jq ". + [ $NEW_JSON ]")
 
-            done < <(echo "$CONTENT" | tail -n +2)
+            done < <(echo "$CONTENT")
 
           done < changes.txt
 
