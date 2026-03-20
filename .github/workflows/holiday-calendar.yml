@@ -89,6 +89,27 @@ jobs:
           echo "Final JSON:"
           echo "$JSON_OUTPUT" > output.json
           cat output.json
+          
+          echo "========================================="
+          echo "🎯 HOLIDAY CALENDAR PROCESSING COMPLETED"
+          echo "========================================="
+          
+          TOTAL_RECORDS=$(jq length output.json)
+          
+          echo "📊 Total Records Processed: $TOTAL_RECORDS"
+          
+          echo "📁 Output File: output.json"
+          
+          if [ "$TOTAL_RECORDS" -eq 0 ]; then
+            echo "⚠️ No data found to process"
+          else
+            echo "✅ Data successfully generated"
+          fi
+          
+          echo "========================================="
+          echo "📦 Final JSON Preview:"
+          cat output.json
+          echo "========================================="
 
       # - name: Wake up Config Server
       #   run: |
