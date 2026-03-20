@@ -22,9 +22,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Detect changes and process files
+      - name: Process CSV and Generate JSON
         run: |
-          echo "Detecting file changes..."
+          echo "🔍 Detecting file changes..."
 
           git diff --name-status ${{ github.event.before }} ${{ github.sha }} > changes.txt
           cat changes.txt
@@ -33,12 +33,11 @@ jobs:
 
           while read status file; do
 
-            # Only process target folder
             if [[ "$file" != holidayCalendar/* ]]; then
               continue
             fi
 
-            echo "Processing $file with status $status"
+            echo "📁 Processing $file with status $status"
 
             FILE_STATUS=""
 
@@ -64,10 +63,10 @@ jobs:
 
             YEAR=$(basename "$file" .csv)
 
-            echo "📄 Content Preview:"
+            echo "📄 Preview:"
             echo "$CONTENT" | head -5
 
-            # 🔥 AUTO DETECT DELIMITER
+            # Detect delimiter
             if echo "$CONTENT" | head -1 | grep -q '|'; then
               DELIM='|'
             else
@@ -76,14 +75,12 @@ jobs:
 
             echo "🔍 Using delimiter: $DELIM"
 
-            # 🔥 FIXED PARSING (NO SUBSHELL + HANDLE \r)
             while IFS="$DELIM" read -r DATE DAY DESCRIPTION; do
 
               DATE=$(echo "$DATE" | tr -d '\r' | xargs)
               DAY=$(echo "$DAY" | tr -d '\r' | xargs)
               DESCRIPTION=$(echo "$DESCRIPTION" | tr -d '\r' | xargs)
 
-              # skip empty rows
               if [[ -z "$DATE" || "$DATE" == "Date" ]]; then
                 continue
               fi
@@ -111,21 +108,95 @@ jobs:
           echo "$JSON_OUTPUT" > output.json
 
           echo "========================================="
-          echo "🎯 HOLIDAY CALENDAR PROCESSING COMPLETED"
+          echo "🎯 PROCESSING COMPLETED"
           echo "========================================="
 
           TOTAL_RECORDS=$(jq length output.json)
 
-          echo "📊 Total Records Processed: $TOTAL_RECORDS"
-          echo "📁 Output File: output.json"
+          echo "📊 Total Records: $TOTAL_RECORDS"
 
-          if [ "$TOTAL_RECORDS" -eq 0 ]; then
-            echo "⚠️ No data found to process"
-          else
-            echo "✅ Data successfully generated"
-          fi
-
-          echo "========================================="
-          echo "📦 Final JSON Preview:"
           cat output.json
-          echo "========================================="
+
+      # # ===============================
+      # # 🌐 STEP 1: WAKE CONFIG SERVER
+      # # ===============================
+      # - name: Wake Config Server
+      #   run: |
+      #     echo "🌐 Waking Config Server..."
+
+      #     for i in {1..6}; do
+      #       STATUS=$(curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health | jq -r '.status')
+      #       echo "Attempt $i → $STATUS"
+
+      #       if [ "$STATUS" == "UP" ]; then
+      #         echo "✅ Config Server UP"
+      #         exit 0
+      #       fi
+
+      #       sleep 5
+      #     done
+
+      #     echo "❌ Config Server not responding"
+      #     exit 1
+
+      # # ===============================
+      # # 🌐 STEP 2: WAKE DB SERVER
+      # # ===============================
+      # - name: Wake DB Server
+      #   run: |
+      #     echo "🌐 Waking DB Server..."
+
+      #     for i in {1..6}; do
+      #       STATUS=$(curl -s https://funmarketdb.onrender.com/actuator/health | jq -r '.status')
+      #       echo "Attempt $i → $STATUS"
+
+      #       if [ "$STATUS" == "UP" ]; then
+      #         echo "✅ DB Server UP"
+      #         exit 0
+      #       fi
+
+      #       sleep 5
+      #     done
+
+      #     echo "❌ DB Server not responding"
+      #     exit 1
+
+      # # ===============================
+      # # 🚀 STEP 3: SEND DATA
+      # # ===============================
+      # - name: Send Data to API
+      #   run: |
+      #     echo "🚀 Sending data..."
+
+      #     if [ ! -s output.json ]; then
+      #       echo "⚠️ No file found"
+      #       exit 0
+      #     fi
+
+      #     TOTAL_RECORDS=$(jq length output.json)
+
+      #     if [ "$TOTAL_RECORDS" -eq 0 ]; then
+      #       echo "⚠️ No data to send"
+      #       exit 0
+      #     fi
+
+      #     echo "📦 Sending $TOTAL_RECORDS records..."
+
+      #     RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
+      #       https://funmarketdb.onrender.com/fun-market/holidayCalender/addHolidays \
+      #       -H "Content-Type: application/json" \
+      #       -d @output.json)
+
+      #     BODY=$(echo "$RESPONSE" | sed -n '1,/HTTP_STATUS:/p' | sed '$d')
+      #     STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTP_STATUS://')
+
+      #     echo "📡 Status: $STATUS"
+      #     echo "📨 Response:"
+      #     echo "$BODY"
+
+      #     if [ "$STATUS" -ne 200 ]; then
+      #       echo "❌ API failed"
+      #       exit 1
+      #     fi
+
+      #     echo "✅ SUCCESS: Data sent!"
