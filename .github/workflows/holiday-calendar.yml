@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # IMPORTANT for git history
+          fetch-depth: 0
 
       - name: Install dependencies
         run: |
@@ -27,14 +27,12 @@ jobs:
           echo "Detecting file changes..."
 
           git diff --name-status ${{ github.event.before }} ${{ github.sha }} > changes.txt
-
           cat changes.txt
 
           JSON_OUTPUT="[]"
 
           while read status file; do
 
-            # Only process holidayCalendar folder
             if [[ "$file" != holidayCalendar/* ]]; then
               continue
             fi
@@ -53,18 +51,32 @@ jobs:
 
             elif [[ "$status" == "D" ]]; then
               FILE_STATUS="REMOVED"
-              CONTENT=$(git show ${{ github.event.before }}:"$file")
+              CONTENT=$(git show HEAD~1:"$file" 2>/dev/null || echo "")
+
+              if [ -z "$CONTENT" ]; then
+                echo "⚠️ Skipping $file (no content found)"
+                continue
+              fi
             else
               continue
             fi
 
             YEAR=$(basename "$file" .csv)
 
-            echo "$CONTENT" | tail -n +2 | while IFS='|' read -r DATE DAY DESCRIPTION; do
+            echo "📄 Content Preview:"
+            echo "$CONTENT" | head -5
 
-              DATE=$(echo $DATE | xargs)
-              DAY=$(echo $DAY | xargs)
-              DESCRIPTION=$(echo $DESCRIPTION | xargs)
+            # 🔥 FIX: NO PIPE → NO SUBSHELL
+            while IFS='|' read -r DATE DAY DESCRIPTION; do
+
+              DATE=$(echo "$DATE" | xargs)
+              DAY=$(echo "$DAY" | xargs)
+              DESCRIPTION=$(echo "$DESCRIPTION" | xargs)
+
+              # skip empty lines
+              if [[ -z "$DATE" ]]; then
+                continue
+              fi
 
               NEW_JSON=$(jq -n \
                 --arg year "$YEAR" \
@@ -82,70 +94,28 @@ jobs:
 
               JSON_OUTPUT=$(echo "$JSON_OUTPUT" | jq ". + [ $NEW_JSON ]")
 
-            done
+            done < <(echo "$CONTENT" | tail -n +2)
 
           done < changes.txt
 
-          echo "Final JSON:"
           echo "$JSON_OUTPUT" > output.json
-          cat output.json
-          
+
           echo "========================================="
           echo "🎯 HOLIDAY CALENDAR PROCESSING COMPLETED"
           echo "========================================="
-          
+
           TOTAL_RECORDS=$(jq length output.json)
-          
+
           echo "📊 Total Records Processed: $TOTAL_RECORDS"
-          
           echo "📁 Output File: output.json"
-          
+
           if [ "$TOTAL_RECORDS" -eq 0 ]; then
             echo "⚠️ No data found to process"
           else
             echo "✅ Data successfully generated"
           fi
-          
+
           echo "========================================="
           echo "📦 Final JSON Preview:"
           cat output.json
           echo "========================================="
-
-      # - name: Wake up Config Server
-      #   run: |
-      #     echo "Waking Config Server..."
-      #     for i in {1..5}; do
-      #       STATUS=$(curl -s https://funmarketconfigserver-dckt.onrender.com/actuator/health | jq -r '.status')
-      #       echo "Attempt $i - Status: $STATUS"
-      #       if [ "$STATUS" == "UP" ]; then
-      #         break
-      #       fi
-      #       sleep 5
-      #     done
-
-      # - name: Wake up DB Server
-      #   run: |
-      #     echo "Waking DB Server..."
-      #     for i in {1..5}; do
-      #       STATUS=$(curl -s https://funmarketdb.onrender.com/actuator/health | jq -r '.status')
-      #       echo "Attempt $i - Status: $STATUS"
-      #       if [ "$STATUS" == "UP" ]; then
-      #         break
-      #       fi
-      #       sleep 5
-      #     done
-
-      # - name: Send Data to API
-      #   run: |
-      #     if [ ! -s output.json ]; then
-      #       echo "No data to send"
-      #       exit 0
-      #     fi
-
-      #     echo "Sending data to API..."
-
-      #     curl -X POST https://funmarketdb.onrender.com/fun-market/holidayCalender/addHolidays \
-      #       -H "Content-Type: application/json" \
-      #       -d @output.json
-
-      #     echo "Data sent successfully!"
