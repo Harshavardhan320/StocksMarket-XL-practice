@@ -16,6 +16,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Print statement before server activation check [cite: 5, 10]
+      - name: Pre-Activation Logs
+        run: |
+          echo "Starting workflow: Preparing to wake up services..."
+          echo "Target Folder: masterData/brokers/**"
+
       # - name: Wake up Services
       #   run: |
       #     echo "Waking up Config Server..."
@@ -32,7 +38,7 @@ jobs:
           import glob
           import os
 
-          # Look for CSVs in the masterData/brokers folder
+          # Look for CSVs in the masterData/brokers folder [cite: 6]
           path = 'masterData/brokers/**/*.csv'
           files = glob.glob(path, recursive=True)
           
@@ -42,26 +48,27 @@ jobs:
 
           all_data = []
           for file_path in files:
+              print(f"Processing file: {file_path}")
               with open(file_path, mode='r', encoding='utf-8') as csvfile:
+                  # Uses first row as keys for JSON objects [cite: 8, 9]
                   reader = csv.DictReader(csvfile)
                   for row in reader:
                       all_data.append(row)
 
-          # Save to a local JSON file so you can download it later
+          # Print collected data to console 
+          print("Collected JSON Data:")
+          print(json.dumps(all_data, indent=2))
+
+          # Save to a local JSON file for the upload-artifact step
           with open('processed_broker_data.json', 'w') as f:
               json.dump(all_data, f, indent=2)
 
-          # Send data to the API
+          # Final application send is disabled for testing [cite: 11]
           # if all_data:
           #     url = "https://funmarketdb.onrender.com/broker/addAllBroker"
-          #     response = requests.post(url, json=all_data)
-          #     if response.status_code == 200:
-          #         print(f"Successfully sent {len(all_data)} records.")
-          #     else:
-          #         print(f"Failed to send data. Status: {response.status_code}")
-          #         exit(1)
+          #     ...
 
-      # THIS STEP GIVES YOU THE DOWNLOAD LINK
+      # This creates the download link in the GitHub Actions 'Summary' tab
       - name: Upload JSON for Download
         uses: actions/upload-artifact@v4
         with:
