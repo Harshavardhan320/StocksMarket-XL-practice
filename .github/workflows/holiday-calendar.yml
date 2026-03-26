@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'holidayCalendar/**'
+      - 'masterData/holidayCalendar/**'
 
 jobs:
   process-holidays:
@@ -33,7 +33,7 @@ jobs:
 
           while read status file; do
 
-            if [[ "$file" != holidayCalendar/* ]]; then
+            if [[ "$file" != masterData/holidayCalendar/* ]]; then
               continue
             fi
 
