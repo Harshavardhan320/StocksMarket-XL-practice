@@ -1,0 +1,86 @@
+name: Broker taxes
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'masterData/taxes/brokerCharges/**'
+
+jobs:
+  process-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pre-Activation Logs
+        run: |
+          echo "Starting workflow: Preparing to wake up services..."
+          echo "Target Folder: masterData/taxes/brokerCharges/**"
+
+      # - name: Wake up Services
+      #   run: |
+      #     echo "Waking up Config Server..."
+      #     curl -f -s https://funmarketconfigserver-dckt.onrender.com/actuator/health
+          
+      #     echo "Waking up Database Server..."
+      #     curl -f -s https://funmarketdb.onrender.com/actuator/health
+      #     # -f ensures the script stops if a server returns an error [cite: 10]
+
+      - name: Parse CSV and Send Data
+        shell: python
+        run: |
+          import csv
+          import json
+          import requests
+          import glob
+          import os
+
+          # Find all CSV files in the specific folder path [cite: 4, 6]
+          path = 'masterData/taxes/brokerCharges/**/*.csv'
+          files = glob.glob(path, recursive=True)
+          
+          if not files:
+              print("No CSV files found in masterData/brokers/")
+              exit(0)
+
+          all_data = []
+          for file_path in files:
+              print(f"Processing file: {file_path}")
+              with open(file_path, mode='r', encoding='utf-8') as csvfile:
+                  # Uses the first row as keys for the JSON objects [cite: 8, 9]
+                  reader = csv.DictReader(csvfile)
+                  for row in reader:
+                      all_data.append(row)
+
+          # Print collected data to console for visibility [cite: 10]
+          print("Collected JSON Data:")
+          formatted_json = json.dumps(all_data, indent=2)
+          print(formatted_json)
+
+          # Save to local file for the artifact download
+          with open('processed_broker_data.json', 'w') as f:
+              json.dump(all_data, f, indent=2)
+
+          # Send data to the application API [cite: 5, 11]
+          # if all_data:
+          #     url = "https://funmarketdb.onrender.com/broker/addAllBroker"
+          #     print(f"Sending data to {url}...")
+          #     response = requests.post(url, json=all_data)
+              
+          #     if response.status_code == 200:
+          #         print(f"Success! Sent {len(all_data)} records.")
+          #     else:
+          #         print(f"Failed to send data. Status Code: {response.status_code}")
+          #         print(f"Response: {response.text}")
+          #         exit(1)
+
+      - name: Upload JSON for Download
+        uses: actions/upload-artifact@v4
+        with:
+          name: broker-json-output
+          path: broker_taxes.json
+          retention-days: 7  # Automatically deletes the zip file after 1 week
