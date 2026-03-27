@@ -81,6 +81,6 @@ jobs:
       - name: Upload JSON for Download
         uses: actions/upload-artifact@v4
         with:
-          name: broker-json-output
+          name: broker_taxes
           path: broker_taxes.json
           retention-days: 7  # Automatically deletes the zip file after 1 week
