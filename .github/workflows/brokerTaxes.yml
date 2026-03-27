@@ -44,7 +44,7 @@ jobs:
           files = glob.glob(path, recursive=True)
           
           if not files:
-              print("No CSV files found in masterData/brokers/")
+              print("No CSV files found in masterData/taxes/brokerCharges/")
               exit(0)
 
           all_data = []
@@ -62,7 +62,7 @@ jobs:
           print(formatted_json)
 
           # Save to local file for the artifact download
-          with open('processed_broker_data.json', 'w') as f:
+          with open('broker_taxes.json', 'w') as f:
               json.dump(all_data, f, indent=2)
 
           # Send data to the application API [cite: 5, 11]
