@@ -8,7 +8,11 @@ on:
   push:
     branches:
       - main
-  
+    paths:
+      - 'dailyPerformance/**'
+      - 'weeklyPerformance/**'
+      - 'monthlyPerformance/**'
+      - 'yearlyPerformance/**'
 jobs:
   process:
     runs-on: ubuntu-latest
@@ -79,48 +83,48 @@ jobs:
         with open(os.environ["GITHUB_OUTPUT"], "a") as out:
             out.write("continue=true\n")
         EOF
-############################################
-# STEP 5 — Wake services
-############################################
-    # - name: Wake & Wait Services
-    #   if: steps.filter.outputs.continue == 'true'
-    #   run: |
+# ############################################
+# # STEP 5 — Wake services
+# ############################################
+#     - name: Wake & Wait Services
+#       if: steps.filter.outputs.continue == 'true'
+#       run: |
 
-    #     check_service() {
-    #       NAME=$1
-    #       URL=$2
+#         check_service() {
+#           NAME=$1
+#           URL=$2
 
-    #       for i in {1..60}
-    #       do
-    #         if curl -s "$URL" | grep -q "UP"; then
-    #           echo "$NAME UP ✅"
-    #           return 0
-    #         fi
-    #         echo "$NAME retry $i"
-    #         sleep 5
-    #       done
+#           for i in {1..60}
+#           do
+#             if curl -s "$URL" | grep -q "UP"; then
+#               echo "$NAME UP ✅"
+#               return 0
+#             fi
+#             echo "$NAME retry $i"
+#             sleep 5
+#           done
 
-    #       echo "$NAME failed ❌"
-    #       exit 1
-    #     }
+#           echo "$NAME failed ❌"
+#           exit 1
+#         }
 
-    #     # Config first
-    #     check_service "Config" "https://funmarketconfigserver-dckt.onrender.com/actuator/health"
+#         # Config first
+#         check_service "Config" "https://funmarketconfigserver-dckt-wlcj.onrender.com/actuator/health"
 
-    #     # Trigger DB + GitReader
-    #     curl -s https://funmarketdb.onrender.com/actuator/health || true &
-    #     curl -s https://funmarketgitreader.onrender.com/actuator/health || true &
-    #     wait
+#         # Trigger DB + GitReader
+#         curl -s https://funmarketdb.onrender.com/actuator/health || true &
+#         curl -s https://funmarketgitreader.onrender.com/actuator/health || true &
+#         wait
 
-    #     # Wait parallel
-    #     check_service "DB" "https://funmarketdb.onrender.com/actuator/health" &
-    #     PID_DB=$!
+#         # Wait parallel
+#         check_service "DB" "https://funmarketdb.onrender.com/actuator/health" &
+#         PID_DB=$!
 
-    #     check_service "GitReader" "https://funmarketgitreader.onrender.com/actuator/health" &
-    #     PID_GR=$!
+#         check_service "GitReader" "https://funmarketgitreader.onrender.com/actuator/health" &
+#         PID_GR=$!
 
-    #     wait $PID_DB
-    #     wait $PID_GR
+#         wait $PID_DB
+#         wait $PID_GR
 
 ############################################
 # STEP 6 — Get PR number
