@@ -1,0 +1,97 @@
+name: Process Stock Transactions (Optimized)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'masterData/holdings/stockTransaction.csv'
+
+jobs:
+  sync-holdings:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history so we can compare versions
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install pandas
+
+      - name: Generate Delta JSON
+        id: delta
+        shell: python
+        run: |
+          import pandas as pd
+          import json
+          import os
+          import subprocess
+
+          file_path = 'masterData/holdings/stockTransaction.csv'
+          
+          # Load current version
+          curr_df = pd.read_csv(file_path)
+          
+          # Load previous version using git
+          try:
+              prev_content = subprocess.check_output(['git', 'show', 'HEAD~1:' + file_path]).decode('utf-8')
+              from io import StringIO
+              prev_df = pd.read_csv(StringIO(prev_content))
+          except Exception:
+              prev_df = pd.DataFrame(columns=curr_df.columns)
+
+          # Add status tags
+          curr_ids = curr_df.iloc[:, 0].tolist()
+          prev_ids = prev_df.iloc[:, 0].tolist()
+          
+          results = []
+
+          # ADDED or MODIFIED
+          for _, row in curr_df.iterrows():
+              row_id = row.iloc[0]
+              row_dict = row.to_dict()
+              if row_id not in prev_ids:
+                  row_dict['status'] = 'ADDED'
+                  results.append(row_dict)
+              else:
+                  prev_row = prev_df[prev_df.iloc[:, 0] == row_id].iloc[0]
+                  if not row.equals(prev_row):
+                      row_dict['status'] = 'MODIFIED'
+                      results.append(row_dict)
+
+          # REMOVED
+          for _, row in prev_df.iterrows():
+              if row.iloc[0] not in curr_ids:
+                  row_dict = row.to_dict()
+                  row_dict['status'] = 'REMOVED'
+                  results.append(row_dict)
+
+          with open('payload.json', 'w') as f:
+              json.dump(results, f, indent=2)
+
+      # - name: Wait for Backend Services
+      #   run: |
+      #     for url in "https://funmarketconfigserver-dckt.onrender.com/actuator/health" "https://funmarketdb.onrender.com/actuator/health"; do
+      #       echo "Checking $url..."
+      #       until curl -s -f "$url" | grep -q "UP"; do
+      #         echo "Waiting for service at $url..."
+      #         sleep 3
+      #       done
+      #     done
+
+      # - name: Post Data to Backend
+      #   if: hashFiles('payload.json') != ''
+      #   run: |
+      #     if [ "$(jq '. | length' payload.json)" -gt 0 ]; then
+      #       curl -X POST https://funmarketdb.onrender.com/holding/processShareTransaction \
+      #         -H "Content-Type: application/json" \
+      #         -d @payload.json
+      #     else
+      #       echo "No changes to sync."
+      #     fi
