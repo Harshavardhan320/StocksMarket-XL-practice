@@ -1,4 +1,4 @@
-name: Process Stock Transactions (Optimized)
+name: Process Stock Transactions (Full Fix)
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetch all history so we can compare versions
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,27 +32,21 @@ jobs:
           import json
           import os
           import subprocess
+          from io import StringIO
 
           file_path = 'masterData/holdings/stockTransaction.csv'
-          
-          # Load current version
           curr_df = pd.read_csv(file_path)
           
-          # Load previous version using git
           try:
               prev_content = subprocess.check_output(['git', 'show', 'HEAD~1:' + file_path]).decode('utf-8')
-              from io import StringIO
               prev_df = pd.read_csv(StringIO(prev_content))
           except Exception:
               prev_df = pd.DataFrame(columns=curr_df.columns)
 
-          # Add status tags
           curr_ids = curr_df.iloc[:, 0].tolist()
           prev_ids = prev_df.iloc[:, 0].tolist()
-          
           results = []
 
-          # ADDED or MODIFIED
           for _, row in curr_df.iterrows():
               row_id = row.iloc[0]
               row_dict = row.to_dict()
@@ -65,7 +59,6 @@ jobs:
                       row_dict['status'] = 'MODIFIED'
                       results.append(row_dict)
 
-          # REMOVED
           for _, row in prev_df.iterrows():
               if row.iloc[0] not in curr_ids:
                   row_dict = row.to_dict()
@@ -75,20 +68,31 @@ jobs:
           with open('payload.json', 'w') as f:
               json.dump(results, f, indent=2)
 
+      - name: Zip and Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-transaction-zip
+          path: payload.json
+          retention-days: 7
+
       # - name: Wait for Backend Services
       #   run: |
       #     for url in "https://funmarketconfigserver-dckt.onrender.com/actuator/health" "https://funmarketdb.onrender.com/actuator/health"; do
       #       echo "Checking $url..."
-      #       until curl -s -f "$url" | grep -q "UP"; do
-      #         echo "Waiting for service at $url..."
-      #         sleep 3
+      #       # Try up to 10 times to see if server is UP
+      #       for i in {1..10}; do
+      #         if curl -s -f "$url" | grep -q "UP"; then
+      #           echo "$url is UP!"
+      #           break
+      #         fi
+      #         echo "Waiting for $url... (attempt $i)"
+      #         sleep 10
       #       done
       #     done
 
       # - name: Post Data to Backend
-      #   if: hashFiles('payload.json') != ''
       #   run: |
-      #     if [ "$(jq '. | length' payload.json)" -gt 0 ]; then
+      #     if [ -s payload.json ] && [ "$(jq '. | length' payload.json)" -gt 0 ]; then
       #       curl -X POST https://funmarketdb.onrender.com/holding/processShareTransaction \
       #         -H "Content-Type: application/json" \
       #         -d @payload.json
