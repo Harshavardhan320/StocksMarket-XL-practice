@@ -1,1 +1,2 @@
-orderUuid,orderId,stockName,quantity,turnOver,orderWindow,transactionDate,taxesApplicable
+orderId,stockName,quantity,orderWindow,transactionDate,brokerName
+1,TATA,30,BUY,11-02-2022,ZERODHA
