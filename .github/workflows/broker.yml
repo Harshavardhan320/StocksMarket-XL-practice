@@ -28,36 +28,66 @@ jobs:
           
       #     echo "Waking up Database Server..."
       #     curl -f -s https://funmarketdb.onrender.com/actuator/health
-      #     # -f ensures the script stops if a server returns an error [cite: 10]
+      #     # -f ensures the script stops if a server returns an error
 
-      - name: Parse CSV and Send Data
+      - name: Parse Touched CSVs and Send Data
         shell: python
         run: |
           import csv
           import json
           import requests
-          import glob
+          import subprocess
           import os
 
-          # Find all CSV files in the specific folder path [cite: 4, 6]
-          path = 'masterData/brokers/**/*.csv'
-          files = glob.glob(path, recursive=True)
+          def get_changed_files():
+              # Gets the status and file path of changes in the latest commit
+              # Output format: STATUS PATH (e.g., A masterData/brokers/test.csv)
+              cmd = ["git", "diff-tree", "--no-commit-id", "--name-status", "-r", "HEAD"]
+              result = subprocess.run(cmd, capture_output=True, text=True)
+              lines = result.stdout.strip().split('\n')
+              
+              changed_files = []
+              for line in lines:
+                  if not line: continue
+                  status, path = line.split(None, 1)
+                  # Filter only for CSVs in the specific directory
+                  if path.startswith('masterData/brokers/') and path.endswith('.csv'):
+                      changed_files.append((status, path))
+              return changed_files
+
+          def get_csv_content(status, path):
+              # If deleted, we must fetch the content from the previous commit
+              if status == 'D':
+                  cmd = ["git", "show", f"HEAD~1:{path}"]
+                  result = subprocess.run(cmd, capture_output=True, text=True)
+                  return result.stdout.splitlines()
+              else:
+                  with open(path, mode='r', encoding='utf-8') as f:
+                      return f.readlines()
+
+          files = get_changed_files()
           
           if not files:
-              print("No CSV files found in masterData/brokers/")
+              print("No relevant CSV changes detected in this commit.")
               exit(0)
 
           all_data = []
-          for file_path in files:
-              print(f"Processing file: {file_path}")
-              with open(file_path, mode='r', encoding='utf-8') as csvfile:
-                  # Uses the first row as keys for the JSON objects [cite: 8, 9]
-                  reader = csv.DictReader(csvfile)
-                  for row in reader:
-                      all_data.append(row)
+          status_map = {'A': 'ADDED', 'M': 'MODIFIED', 'D': 'REMOVED'}
 
-          # Print collected data to console for visibility [cite: 10]
-          print("Collected JSON Data:")
+          for status, file_path in files:
+              print(f"Processing {status_map.get(status, 'UNKNOWN')}: {file_path}")
+              
+              content = get_csv_content(status, file_path)
+              if not content: continue
+              
+              reader = csv.DictReader(content)
+              for row in reader:
+                  # Inject the recordStatus based on Git action
+                  row['recordStatus'] = status_map.get(status, 'UNKNOWN')
+                  all_data.append(row)
+
+          # Print collected data to console for visibility
+          print("Collected JSON Data (Touched Records Only):")
           formatted_json = json.dumps(all_data, indent=2)
           print(formatted_json)
 
@@ -65,7 +95,7 @@ jobs:
           with open('processed_broker_data.json', 'w') as f:
               json.dump(all_data, f, indent=2)
 
-          # Send data to the application API [cite: 5, 11]
+          # Send data to the application API
           # if all_data:
           #     url = "https://funmarketdb.onrender.com/broker/addAllBroker"
           #     print(f"Sending data to {url}...")
@@ -83,4 +113,4 @@ jobs:
         with:
           name: broker-json-output
           path: processed_broker_data.json
-          retention-days: 7  # Automatically deletes the zip file after 1 week
+          retention-days: 7
