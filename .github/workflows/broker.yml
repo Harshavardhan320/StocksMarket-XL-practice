@@ -18,7 +18,7 @@ jobs:
 
       - name: Pre-Activation Logs
         run: |
-          echo "Starting workflow: Preparing to wake up services..."
+          echo "Starting workflow: Isolating specific row changes..."
           echo "Target Folder: masterData/brokers/**"
 
       # - name: Wake up Services
@@ -28,85 +28,76 @@ jobs:
           
       #     echo "Waking up Database Server..."
       #     curl -f -s https://funmarketdb.onrender.com/actuator/health
-      #     # -f ensures the script stops if a server returns an error
 
-      - name: Parse Touched CSVs and Send Data
+      - name: Parse Touched Records and Send Data
         shell: python
         run: |
           import csv
           import json
           import requests
           import subprocess
-          import os
+          import io
 
           def get_changed_files():
-              # Gets the status and file path of changes in the latest commit
-              # Output format: STATUS PATH (e.g., A masterData/brokers/test.csv)
               cmd = ["git", "diff-tree", "--no-commit-id", "--name-status", "-r", "HEAD"]
               result = subprocess.run(cmd, capture_output=True, text=True)
               lines = result.stdout.strip().split('\n')
-              
-              changed_files = []
-              for line in lines:
-                  if not line: continue
-                  status, path = line.split(None, 1)
-                  # Filter only for CSVs in the specific directory
-                  if path.startswith('masterData/brokers/') and path.endswith('.csv'):
-                      changed_files.append((status, path))
-              return changed_files
+              return [line.split(None, 1) for line in lines if line.strip() and line.split(None, 1)[1].startswith('masterData/brokers/')]
 
-          def get_csv_content(status, path):
-              # If deleted, we must fetch the content from the previous commit
-              if status == 'D':
+          def get_records(content_lines):
+              if not content_lines: return {}
+              # Using brokerIdentifier as the unique key to track rows
+              reader = csv.DictReader(content_lines)
+              return {row['brokerIdentifier']: row for row in reader}
+
+          changed_files = get_changed_files()
+          all_touched_data = []
+
+          for status, path in changed_files:
+              # 1. Get Current Version
+              current_content = []
+              if status != 'D':
+                  with open(path, 'r') as f: current_content = f.readlines()
+              
+              # 2. Get Previous Version
+              prev_content = []
+              try:
                   cmd = ["git", "show", f"HEAD~1:{path}"]
-                  result = subprocess.run(cmd, capture_output=True, text=True)
-                  return result.stdout.splitlines()
-              else:
-                  with open(path, mode='r', encoding='utf-8') as f:
-                      return f.readlines()
+                  prev_result = subprocess.run(cmd, capture_output=True, text=True)
+                  if prev_result.returncode == 0:
+                      prev_content = prev_result.stdout.splitlines()
+              except: pass
 
-          files = get_changed_files()
-          
-          if not files:
-              print("No relevant CSV changes detected in this commit.")
-              exit(0)
+              curr_dict = get_records(current_content)
+              prev_dict = get_records(prev_content)
 
-          all_data = []
-          status_map = {'A': 'ADDED', 'M': 'MODIFIED', 'D': 'REMOVED'}
+              # Find ADDED or MODIFIED
+              for bid, row in curr_dict.items():
+                  if bid not in prev_dict:
+                      row['recordStatus'] = 'ADDED'
+                      all_touched_data.append(row)
+                  elif row != prev_dict[bid]:
+                      row['recordStatus'] = 'MODIFIED'
+                      all_touched_data.append(row)
 
-          for status, file_path in files:
-              print(f"Processing {status_map.get(status, 'UNKNOWN')}: {file_path}")
-              
-              content = get_csv_content(status, file_path)
-              if not content: continue
-              
-              reader = csv.DictReader(content)
-              for row in reader:
-                  # Inject the recordStatus based on Git action
-                  row['recordStatus'] = status_map.get(status, 'UNKNOWN')
-                  all_data.append(row)
+              # Find REMOVED
+              for bid, row in prev_dict.items():
+                  if bid not in curr_dict:
+                      row['recordStatus'] = 'REMOVED'
+                      all_touched_data.append(row)
 
-          # Print collected data to console for visibility
-          print("Collected JSON Data (Touched Records Only):")
-          formatted_json = json.dumps(all_data, indent=2)
-          print(formatted_json)
+          # Output results
+          print(f"Found {len(all_touched_data)} touched records.")
+          print(json.dumps(all_touched_data, indent=2))
 
-          # Save to local file for the artifact download
           with open('processed_broker_data.json', 'w') as f:
-              json.dump(all_data, f, indent=2)
+              json.dump(all_touched_data, f, indent=2)
 
           # Send data to the application API
-          # if all_data:
+          # if all_touched_data:
           #     url = "https://funmarketdb.onrender.com/broker/addAllBroker"
-          #     print(f"Sending data to {url}...")
-          #     response = requests.post(url, json=all_data)
-              
-          #     if response.status_code == 200:
-          #         print(f"Success! Sent {len(all_data)} records.")
-          #     else:
-          #         print(f"Failed to send data. Status Code: {response.status_code}")
-          #         print(f"Response: {response.text}")
-          #         exit(1)
+          #     response = requests.post(url, json=all_touched_data)
+          #     if response.status_code != 200: exit(1)
 
       - name: Upload JSON for Download
         uses: actions/upload-artifact@v4
