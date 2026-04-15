@@ -1,2 +1,2 @@
-orderId,stockName,quantity,orderWindow,transactionDate,brokerName
-1,TATA,30,BUY,11-02-2022,ZERODHA
+orderId,stockName,quantity,orderWindow,transactionDate,brokerName,buyingAt
+1,TATA,30,BUY,11-02-2022,ZERODHA,234
